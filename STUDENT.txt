@@ -1,2 +1,1 @@
-APP_URL= http://192.168.110.146:8080/
-MAP_SERVICE_API_KEY=<api_key>
+APP_URL=   "homepage": "https://deak-20.github.io/dicoding-story-pwa-",

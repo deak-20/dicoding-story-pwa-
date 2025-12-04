@@ -88,33 +88,32 @@ export default class HomePage {
   }
 
   _initializeMap() {
-    // Initialize Leaflet map
-    this._map = L.map('map').setView([-2.5489, 118.0149], 5); // Center of Indonesia
+    this._map = L.map('map').setView([-2.5489, 118.0149], 5);
 
-    // Add multiple tile layers
     const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors',
       maxZoom: 19,
     });
 
-    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      attribution: '© Esri',
-      maxZoom: 19,
-    });
+    const satelliteLayer = L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: '© Esri',
+        maxZoom: 19,
+      }
+    );
 
     const topoLayer = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenTopoMap contributors',
       maxZoom: 17,
     });
 
-    // Add default layer
     streetLayer.addTo(this._map);
 
-    // Add layer control
     const baseMaps = {
       'Street Map': streetLayer,
-      'Satellite': satelliteLayer,
-      'Topographic': topoLayer,
+      Satellite: satelliteLayer,
+      Topographic: topoLayer,
     };
 
     L.control.layers(baseMaps).addTo(this._map);
@@ -148,52 +147,80 @@ export default class HomePage {
       await this._toggleNotifications();
     });
 
-    // Initialize notification button state
     this._updateNotificationButton();
   }
 
+  async _updateFavoriteButtons() {
+    const favoriteButtons = document.querySelectorAll('.favorite-btn');
+
+    for (const btn of favoriteButtons) {
+      const storyId = btn.dataset.storyId;
+
+      try {
+        const isFavorite = await dbHelper.isFavorite(storyId);
+
+        const icon = btn.querySelector('.favorite-icon');
+        if (isFavorite) {
+          icon.textContent = '❤️';
+          btn.classList.add('favorited');
+          btn.setAttribute('aria-label', 'Remove from favorites');
+        } else {
+          icon.textContent = '🤍';
+          btn.classList.remove('favorited');
+          btn.setAttribute('aria-label', 'Add to favorites');
+        }
+      } catch (error) {
+        console.error('Error checking favorite status:', error);
+        const icon = btn.querySelector('.favorite-icon');
+        icon.textContent = '🤍';
+      }
+    }
+  }
+
   async _loadStories() {
-    const loadingDiv = document.getElementById('stories-loading');
-    const errorDiv = document.getElementById('stories-error');
-    const storiesList = document.getElementById('stories-list');
-    const filterSelect = document.getElementById('location-filter');
+    const loading = document.getElementById('stories-loading');
+    const error = document.getElementById('stories-error');
+    const list = document.getElementById('stories-list');
+    const filter = document.getElementById('location-filter').value;
 
-    loadingDiv.style.display = 'block';
-    errorDiv.style.display = 'none';
-    storiesList.innerHTML = '';
-
-    // Clear existing markers
-    Object.values(this._markers).forEach(marker => marker.remove());
-    this._markers = {};
+    loading.style.display = 'flex';
+    error.style.display = 'none';
+    list.innerHTML = '';
 
     try {
-      const locationFilter = filterSelect?.value === 'with-location' ? 1 : 0;
-      const result = await StoryAPI.getAllStories({ location: locationFilter, size: 50 });
-      
-      this._stories = result.listStory || [];
+      const response = await StoryAPI.getStories();
+      let stories = response.listStory || [];
+
+      if (filter === 'with-location') {
+        stories = stories.filter((s) => s.lat && s.lon);
+      }
+
+      this._stories = stories;
+
       this._renderStories();
       this._renderMarkers();
-      
-      loadingDiv.style.display = 'none';
-    } catch (error) {
-      console.error('Error loading stories:', error);
-      loadingDiv.style.display = 'none';
-      errorDiv.style.display = 'block';
+    } catch (err) {
+      console.error(err);
+      error.style.display = 'block';
+    } finally {
+      loading.style.display = 'none';
     }
   }
 
   _renderStories() {
     const storiesList = document.getElementById('stories-list');
-    
+
     if (this._stories.length === 0) {
       storiesList.innerHTML = '<p class="empty-state">No stories found. Be the first to share!</p>';
       return;
     }
 
-    storiesList.innerHTML = this._stories.map((story) => `
+    storiesList.innerHTML = this._stories
+      .map(
+        (story) => `
       <article class="story-card" data-story-id="${story.id}">
-        <img 
-          src="${story.photoUrl}" 
+        <img
+          src="${story.photoUrl}"
           alt="${story.description}"
           class="story-image"
           loading="lazy"
@@ -201,11 +228,7 @@ export default class HomePage {
         <div class="story-content">
           <div class="story-header">
             <h3 class="story-author">${story.name}</h3>
-            <button 
-              class="favorite-btn" 
-              data-story-id="${story.id}"
-              aria-label="Add to favorites"
-            >
+            <button class="favorite-btn" data-story-id="${story.id}" aria-label="Add to favorites">
               <span class="favorite-icon">🤍</span>
             </button>
           </div>
@@ -215,45 +238,49 @@ export default class HomePage {
               ${new Date(story.createdAt).toLocaleDateString('id-ID', {
                 year: 'numeric',
                 month: 'long',
-                day: 'numeric'
+                day: 'numeric',
               })}
             </time>
-            ${story.lat && story.lon ? `
-              <button class="story-location-btn" data-lat="${story.lat}" data-lon="${story.lon}" data-story-id="${story.id}">
-                📍 View on Map
-              </button>
-            ` : ''}
+            ${
+              story.lat && story.lon
+                ? `
+            <button class="story-location-btn" data-lat="${story.lat}" data-lon="${story.lon}" data-story-id="${story.id}">
+              📍 View on Map
+            </button>`
+                : ''
+            }
           </div>
         </div>
       </article>
-    `).join('');
+    `
+      )
+      .join('');
 
-    // Update favorite button states
-    this._updateFavoriteButtons();
+    this._updateFavoriteButtons().catch((err) => {
+      console.error('Error updating favorite buttons:', err);
+    });
 
-    // Add event listeners for location buttons
-    storiesList.querySelectorAll('.story-location-btn').forEach(btn => {
+    storiesList.querySelectorAll('.story-location-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const lat = parseFloat(e.target.dataset.lat);
         const lon = parseFloat(e.target.dataset.lon);
         const storyId = e.target.dataset.storyId;
-        
+
         this._map.setView([lat, lon], 13);
         this._highlightMarker(storyId);
       });
     });
 
-    // Add event listeners for favorite buttons
-    storiesList.querySelectorAll('.favorite-btn').forEach(btn => {
+    storiesList.querySelectorAll('.favorite-btn').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const storyId = e.currentTarget.dataset.storyId;
         await this._toggleFavorite(storyId);
+        await this._updateFavoriteButtons();
       });
     });
 
-    // Add hover effects for story cards
-    storiesList.querySelectorAll('.story-card').forEach(card => {
+    storiesList.querySelectorAll('.story-card').forEach((card) => {
       card.addEventListener('mouseenter', (e) => {
         const storyId = e.currentTarget.dataset.storyId;
         this._highlightMarker(storyId);
@@ -266,11 +293,17 @@ export default class HomePage {
   }
 
   _renderMarkers() {
-    const storiesWithLocation = this._stories.filter(story => story.lat && story.lon);
+    const storiesWithLocation = this._stories.filter((story) => story.lat && story.lon);
 
-    storiesWithLocation.forEach(story => {
+    Object.values(this._markers).forEach((marker) => {
+      marker.remove();
+    });
+
+    this._markers = {};
+
+    storiesWithLocation.forEach((story) => {
       const marker = L.marker([story.lat, story.lon], {
-        icon: createStoryMarker()
+        icon: createStoryMarker(),
       })
         .addTo(this._map)
         .bindPopup(`
@@ -283,7 +316,6 @@ export default class HomePage {
 
       this._markers[story.id] = marker;
 
-      // Add click event to scroll to story card
       marker.on('click', () => {
         const storyCard = document.querySelector(`[data-story-id="${story.id}"]`);
         if (storyCard) {
@@ -294,7 +326,6 @@ export default class HomePage {
       });
     });
 
-    // Fit map to show all markers if there are any
     if (storiesWithLocation.length > 0) {
       const group = L.featureGroup(Object.values(this._markers));
       this._map.fitBounds(group.getBounds().pad(0.1));
@@ -303,11 +334,10 @@ export default class HomePage {
 
   _highlightMarker(storyId) {
     this._unhighlightMarkers();
-    
+
     const marker = this._markers[storyId];
     if (marker) {
       this._activeMarkerId = storyId;
-      // Change icon to active marker
       marker.setIcon(createActiveMarker());
       marker.setZIndexOffset(1000);
       marker.openPopup();
@@ -318,7 +348,6 @@ export default class HomePage {
     if (this._activeMarkerId) {
       const marker = this._markers[this._activeMarkerId];
       if (marker) {
-        // Change icon back to normal marker
         marker.setIcon(createStoryMarker());
         marker.setZIndexOffset(0);
       }

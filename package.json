@@ -1,18 +1,21 @@
 {
-  "name": "dicoding-story-app",
+  "homepage": "https://deak-20.github.io/dicoding-story-pwa-",
   "version": "1.0.0",
   "description": "Dicoding Story App - Share your Dicoding moments",
   "scripts": {
     "build": "webpack --config webpack.prod.js",
     "start-dev": "webpack serve --config webpack.dev.js",
-    "serve": "http-server dist"
+    "serve": "http-server dist",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist"
+
   },
   "keywords": [
     "dicoding",
     "story",
     "spa"
   ],
-  "author": "YOUR_NAME <yourmail@mail.com>",
+  "author": "Deak <napitupuludeak426@gmail.com>",
   "license": "ISC",
   "devDependencies": {
     "@babel/preset-env": "^7.26.9",
@@ -21,6 +24,7 @@
     "copy-webpack-plugin": "^13.0.0",
     "css-loader": "^7.1.2",
     "file-loader": "^6.2.0",
+    "gh-pages": "^6.3.0",
     "html-webpack-plugin": "^5.6.3",
     "http-server": "^14.1.1",
     "mini-css-extract-plugin": "^2.9.2",
