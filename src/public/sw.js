@@ -47,7 +47,7 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch Event
+// Fetch Event - FIXED: Clone response before using it
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -60,8 +60,10 @@ self.addEventListener('fetch', (event) => {
       caches.open(DATA_CACHE_NAME).then(async (cache) => {
         try {
           const netResponse = await fetch(request);
+          // PERBAIKAN: Clone dulu sebelum digunakan
           if (request.method === 'GET' && netResponse.ok) {
-            cache.put(request, netResponse.clone());
+            const responseToCache = netResponse.clone();
+            cache.put(request, responseToCache);
           }
           return netResponse;
         } catch (_) {
@@ -89,9 +91,11 @@ self.addEventListener('fetch', (event) => {
 
       return fetch(request)
         .then((response) => {
+          // PERBAIKAN: Clone dulu sebelum caching
           if (request.method === 'GET' && response.ok) {
+            const responseToCache = response.clone();
             caches.open(CACHE_NAME).then((cache) =>
-              cache.put(request, response.clone())
+              cache.put(request, responseToCache)
             );
           }
           return response;
@@ -105,7 +109,7 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Push Notification Event
+// Push Notification Event - FIXED VERSION
 self.addEventListener('push', (event) => {
   console.log('[SW] Push received');
 
@@ -116,23 +120,46 @@ self.addEventListener('push', (event) => {
     data: { url: '/' }
   };
 
-  try {
-    if (event.data) {
+  // PERBAIKAN: Handle both JSON and plain text
+  if (event.data) {
+    try {
+      // Coba parse sebagai JSON dulu
       const data = event.data.json();
+      console.log('[SW] Push data parsed as JSON:', data);
+      
       payload.title = data.title || payload.title;
       payload.body = data.body || payload.body;
+      payload.icon = data.icon || payload.icon;
       payload.data = data.data || payload.data;
+    } catch (err) {
+      // Jika gagal parse JSON, gunakan sebagai plain text
+      console.log('[SW] Push data is plain text, not JSON');
+      
+      try {
+        const textData = event.data.text();
+        console.log('[SW] Push text data:', textData);
+        
+        // Gunakan text sebagai body notifikasi
+        if (textData && textData.trim()) {
+          payload.body = textData;
+        }
+      } catch (textErr) {
+        console.error('[SW] Failed to read push data as text:', textErr);
+      }
     }
-  } catch (err) {
-    console.error('[SW] Push parse error:', err);
   }
 
+  // PERBAIKAN: Check notification permission dulu
   event.waitUntil(
     self.registration.showNotification(payload.title, {
       body: payload.body,
       icon: payload.icon,
       badge: payload.icon,
       data: payload.data
+    }).catch((error) => {
+      console.error('[SW] Failed to show notification:', error);
+      // Silently fail jika permission tidak ada
+      // Ini normal saat testing di DevTools tanpa permission
     })
   );
 });

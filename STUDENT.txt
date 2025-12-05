@@ -1,1 +1,1 @@
-APP_URL=   "homepage": "https://deak-20.github.io/dicoding-story-pwa-",
+APP_URL=   "homepage": "https://clinquant-babka-46838c.netlify.app/",

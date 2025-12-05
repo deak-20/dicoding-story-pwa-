@@ -28,7 +28,8 @@ export default class FavoritesPage {
 
         <div class="favorites-controls">
           <div class="search-box">
-            <input 
+          <label for="search-favorites">Search:</label>
+          <input
               type="search" 
               id="search-favorites" 
               placeholder="Search favorites..." 
