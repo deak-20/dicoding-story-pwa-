@@ -5,6 +5,7 @@ const urlsToCache = [
   '/',
   '/index.html',
   '/app.bundle.js',
+  '/app.css',  
   '/images/icon-192x192.png',
   '/images/icon-512x512.png',
   '/favicon.png',
@@ -18,7 +19,10 @@ self.addEventListener('install', (event) => {
     caches.open(CACHE_NAME)
       .then((cache) => {
         console.log('[Service Worker] Caching app shell');
-        return cache.addAll(urlsToCache);
+        return cache.addAll(urlsToCache).catch((error) => {
+          console.error('[Service Worker] Failed to cache:', error);
+          // Continue anyway even if some files fail
+        });
       })
       .then(() => {
         console.log('[Service Worker] Skip waiting');
@@ -55,14 +59,19 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // Skip chrome extension and other non-http requests
+  if (!request.url.startsWith('http')) {
+    return;
+  }
+
   // Handle API requests - Network First with Cache Fallback
   if (url.origin === 'https://story-api.dicoding.dev') {
     event.respondWith(
       caches.open(DATA_CACHE_NAME).then((cache) => {
         return fetch(request)
           .then((networkResponse) => {
-            // Only cache GET requests
-            if (request.method === 'GET') {
+            // Only cache successful GET requests
+            if (request.method === 'GET' && networkResponse.ok) {
               cache.put(request, networkResponse.clone());
             }
             return networkResponse;
@@ -71,13 +80,14 @@ self.addEventListener('fetch', (event) => {
             // If network fails, try to get from cache
             return cache.match(request).then((cachedResponse) => {
               if (cachedResponse) {
+                console.log('[Service Worker] Serving from cache:', request.url);
                 return cachedResponse;
               }
-              // If no cache, return offline page or error
+              // If no cache, return offline response
               return new Response(
                 JSON.stringify({
                   error: true,
-                  message: 'You are offline. Please check your connection.',
+                  message: 'You are offline. Cached data is not available.',
                   listStory: []
                 }),
                 {
@@ -96,18 +106,28 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
       if (cachedResponse) {
+        console.log('[Service Worker] Serving from cache:', request.url);
         return cachedResponse;
       }
 
-      return fetch(request).then((networkResponse) => {
-        // Cache the new request for future use
-        if (request.method === 'GET') {
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(request, networkResponse.clone());
-          });
-        }
-        return networkResponse;
-      });
+      return fetch(request)
+        .then((networkResponse) => {
+          // Cache successful responses
+          if (request.method === 'GET' && networkResponse.ok) {
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, networkResponse.clone());
+            });
+          }
+          return networkResponse;
+        })
+        .catch((error) => {
+          console.error('[Service Worker] Fetch failed:', error);
+          // Return a fallback response for failed requests
+          if (request.destination === 'image') {
+            return new Response('', { status: 404, statusText: 'Image not found' });
+          }
+          throw error;
+        });
     })
   );
 });
@@ -187,12 +207,16 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((clientList) => {
+        const baseUrl = new URL(urlToOpen, self.location.origin).href;
+        
         // Check if there's already a window open
         for (const client of clientList) {
-          if (client.url === urlToOpen && 'focus' in client) {
+          const clientUrl = new URL(client.url).href;
+          if (clientUrl === baseUrl && 'focus' in client) {
             return client.focus();
           }
         }
+        
         // If not, open a new window
         if (clients.openWindow) {
           return clients.openWindow(urlToOpen);
@@ -218,7 +242,12 @@ async function syncOfflineStories() {
     const db = await openDB();
     const tx = db.transaction('pending-stories', 'readonly');
     const store = tx.objectStore('pending-stories');
-    const pendingStories = await store.getAll();
+    const allRequests = store.getAll();
+    
+    const pendingStories = await new Promise((resolve, reject) => {
+      allRequests.onsuccess = () => resolve(allRequests.result);
+      allRequests.onerror = () => reject(allRequests.error);
+    });
 
     console.log('[Service Worker] Found pending stories:', pendingStories.length);
 
@@ -243,7 +272,13 @@ async function syncOfflineStories() {
           // Remove from pending if successful
           const deleteTx = db.transaction('pending-stories', 'readwrite');
           const deleteStore = deleteTx.objectStore('pending-stories');
-          await deleteStore.delete(story.id);
+          const deleteRequest = deleteStore.delete(story.id);
+          
+          await new Promise((resolve, reject) => {
+            deleteRequest.onsuccess = () => resolve();
+            deleteRequest.onerror = () => reject(deleteRequest.error);
+          });
+          
           console.log('[Service Worker] Story synced successfully:', story.id);
         }
       } catch (error) {
@@ -275,7 +310,7 @@ function openDB() {
       const db = event.target.result;
       
       if (!db.objectStoreNames.contains('pending-stories')) {
-        db.createObjectStore('pending-stories', { keyPath: 'id' });
+        db.createObjectStore('pending-stories', { keyPath: 'id', autoIncrement: true });
       }
       
       if (!db.objectStoreNames.contains('favorite-stories')) {

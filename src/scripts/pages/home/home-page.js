@@ -1,6 +1,7 @@
 import StoryAPI from '../../data/story-api';
 import AuthHelper from '../../utils/auth-helper';
 import dbHelper from '../../utils/indexeddb-helper';
+import pushNotification from '../../utils/push-notification-helper';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { createStoryMarker, createActiveMarker } from '../../utils/custom-marker';
@@ -147,63 +148,52 @@ export default class HomePage {
       await this._toggleNotifications();
     });
 
+    // Initialize notification button state
     this._updateNotificationButton();
   }
 
-  async _updateFavoriteButtons() {
-    const favoriteButtons = document.querySelectorAll('.favorite-btn');
-
-    for (const btn of favoriteButtons) {
-      const storyId = btn.dataset.storyId;
-
-      try {
-        const isFavorite = await dbHelper.isFavorite(storyId);
-
-        const icon = btn.querySelector('.favorite-icon');
-        if (isFavorite) {
-          icon.textContent = '❤️';
-          btn.classList.add('favorited');
-          btn.setAttribute('aria-label', 'Remove from favorites');
-        } else {
-          icon.textContent = '🤍';
-          btn.classList.remove('favorited');
-          btn.setAttribute('aria-label', 'Add to favorites');
-        }
-      } catch (error) {
-        console.error('Error checking favorite status:', error);
-        const icon = btn.querySelector('.favorite-icon');
-        icon.textContent = '🤍';
-      }
-    }
-  }
-
   async _loadStories() {
-    const loading = document.getElementById('stories-loading');
-    const error = document.getElementById('stories-error');
-    const list = document.getElementById('stories-list');
-    const filter = document.getElementById('location-filter').value;
+    const loadingDiv = document.getElementById('stories-loading');
+    const errorDiv = document.getElementById('stories-error');
+    const storiesList = document.getElementById('stories-list');
+    const filterSelect = document.getElementById('location-filter');
 
-    loading.style.display = 'flex';
-    error.style.display = 'none';
-    list.innerHTML = '';
+    loadingDiv.style.display = 'block';
+    errorDiv.style.display = 'none';
+    storiesList.innerHTML = '';
+
+    // Clear existing markers
+    Object.values(this._markers).forEach((marker) => marker.remove());
+    this._markers = {};
 
     try {
-      const response = await StoryAPI.getStories();
-      let stories = response.listStory || [];
+      const locationFilter = filterSelect?.value === 'with-location' ? 1 : 0;
 
-      if (filter === 'with-location') {
-        stories = stories.filter((s) => s.lat && s.lon);
-      }
+      console.log('Fetching stories with location filter:', locationFilter);
 
-      this._stories = stories;
+      const result = await StoryAPI.getAllStories({ location: locationFilter, size: 50 });
 
+      console.log('Stories fetched:', result);
+
+      this._stories = result.listStory || [];
       this._renderStories();
       this._renderMarkers();
-    } catch (err) {
-      console.error(err);
-      error.style.display = 'block';
-    } finally {
-      loading.style.display = 'none';
+
+      loadingDiv.style.display = 'none';
+    } catch (error) {
+      console.error('Error loading stories:', error);
+
+      errorDiv.innerHTML = `
+        <p>Failed to load stories.</p>
+        <p style="color: #666; font-size: 0.875rem;">Error: ${error.message}</p>
+        <button id="retry-button" class="btn btn-primary">Retry</button>
+      `;
+      errorDiv.style.display = 'block';
+      loadingDiv.style.display = 'none';
+
+      document.getElementById('retry-button')?.addEventListener('click', () => {
+        this._loadStories();
+      });
     }
   }
 
@@ -256,10 +246,12 @@ export default class HomePage {
       )
       .join('');
 
+    // Update favorite button states
     this._updateFavoriteButtons().catch((err) => {
       console.error('Error updating favorite buttons:', err);
     });
 
+    // Add event listeners for location buttons
     storiesList.querySelectorAll('.story-location-btn').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         const lat = parseFloat(e.target.dataset.lat);
@@ -271,15 +263,16 @@ export default class HomePage {
       });
     });
 
+    // Add event listeners for favorite buttons
     storiesList.querySelectorAll('.favorite-btn').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const storyId = e.currentTarget.dataset.storyId;
         await this._toggleFavorite(storyId);
-        await this._updateFavoriteButtons();
       });
     });
 
+    // Add hover effects for story cards
     storiesList.querySelectorAll('.story-card').forEach((card) => {
       card.addEventListener('mouseenter', (e) => {
         const storyId = e.currentTarget.dataset.storyId;
@@ -294,12 +287,6 @@ export default class HomePage {
 
   _renderMarkers() {
     const storiesWithLocation = this._stories.filter((story) => story.lat && story.lon);
-
-    Object.values(this._markers).forEach((marker) => {
-      marker.remove();
-    });
-
-    this._markers = {};
 
     storiesWithLocation.forEach((story) => {
       const marker = L.marker([story.lat, story.lon], {
@@ -353,5 +340,125 @@ export default class HomePage {
       }
       this._activeMarkerId = null;
     }
+  }
+
+  async _toggleFavorite(storyId) {
+    const story = this._stories.find((s) => s.id === storyId);
+    if (!story) return;
+
+    try {
+      const isFavorite = await dbHelper.isFavorite(storyId);
+
+      if (isFavorite) {
+        await dbHelper.removeFavorite(storyId);
+        this._showToast('Removed from favorites', 'info');
+      } else {
+        await dbHelper.addFavorite(story);
+        this._showToast('Added to favorites', 'success');
+      }
+
+      // Update button state
+      await this._updateFavoriteButtons();
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+      this._showToast('Failed to update favorites', 'error');
+    }
+  }
+
+  async _updateFavoriteButtons() {
+    const favoriteButtons = document.querySelectorAll('.favorite-btn');
+
+    for (const btn of favoriteButtons) {
+      const storyId = btn.dataset.storyId;
+
+      try {
+        const isFavorite = await dbHelper.isFavorite(storyId);
+
+        const icon = btn.querySelector('.favorite-icon');
+        if (isFavorite) {
+          icon.textContent = '❤️';
+          btn.classList.add('favorited');
+          btn.setAttribute('aria-label', 'Remove from favorites');
+        } else {
+          icon.textContent = '🤍';
+          btn.classList.remove('favorited');
+          btn.setAttribute('aria-label', 'Add to favorites');
+        }
+      } catch (error) {
+        console.error('Error checking favorite status:', error);
+        const icon = btn.querySelector('.favorite-icon');
+        icon.textContent = '🤍';
+      }
+    }
+  }
+
+  async _toggleNotifications() {
+    if (!window.swRegistration) {
+      this._showToast('Service Worker not available', 'error');
+      return;
+    }
+
+    try {
+      const isSubscribed = await pushNotification.checkSubscription();
+
+      if (isSubscribed) {
+        const result = await pushNotification.unsubscribe();
+        if (result.success) {
+          this._showToast('Push notifications disabled', 'info');
+          await this._updateNotificationButton();
+        }
+      } else {
+        const result = await pushNotification.subscribe();
+        if (result.success) {
+          this._showToast('Push notifications enabled', 'success');
+          await this._updateNotificationButton();
+        } else {
+          this._showToast(result.error || 'Failed to enable notifications', 'error');
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling notifications:', error);
+      this._showToast('Failed to toggle notifications', 'error');
+    }
+  }
+
+  async _updateNotificationButton() {
+    if (!window.swRegistration) return;
+
+    const notificationToggle = document.getElementById('notification-toggle');
+    const notificationStatus = document.getElementById('notification-status');
+
+    if (!notificationToggle || !notificationStatus) return;
+
+    try {
+      const isSubscribed = await pushNotification.checkSubscription();
+
+      if (isSubscribed) {
+        notificationStatus.textContent = 'Enabled';
+        notificationToggle.classList.add('notification-enabled');
+      } else {
+        notificationStatus.textContent = 'Enable';
+        notificationToggle.classList.remove('notification-enabled');
+      }
+    } catch (error) {
+      console.error('Error checking notification status:', error);
+    }
+  }
+
+  _showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.className = `toast-message ${type}`;
+    toast.textContent = message;
+
+    document.body.appendChild(toast);
+
+    setTimeout(() => {
+      toast.classList.add('show');
+    }, 100);
+
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   }
 }
