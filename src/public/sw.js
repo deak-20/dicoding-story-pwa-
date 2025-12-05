@@ -1,132 +1,105 @@
 const CACHE_NAME = 'dicoding-story-v1';
 const DATA_CACHE_NAME = 'dicoding-story-data-v1';
 
+// Hanya file yang benar-benar ada!
 const urlsToCache = [
   '/',
   '/index.html',
   '/app.bundle.js',
-  '/app.css',  
-  '/images/icon-192x192.png',
-  '/images/icon-512x512.png',
-  '/favicon.png',
+  '/app.css',
+  '/images/icon-512x512.png'
 ];
 
-// Install Event - Cache App Shell
+// Install Event
 self.addEventListener('install', (event) => {
   console.log('[Service Worker] Installing...');
-  
+
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) => {
-        console.log('[Service Worker] Caching app shell');
-        return cache.addAll(urlsToCache).catch((error) => {
-          console.error('[Service Worker] Failed to cache:', error);
-          // Continue anyway even if some files fail
-        });
-      })
-      .then(() => {
-        console.log('[Service Worker] Skip waiting');
-        return self.skipWaiting();
-      })
+    caches.open(CACHE_NAME).then(async (cache) => {
+      console.log('[Service Worker] Caching app shell safely…');
+      for (const url of urlsToCache) {
+        try {
+          await cache.add(url);
+          console.log('[SW] Cached:', url);
+        } catch (err) {
+          console.warn('[SW] Failed to cache:', url, err);
+        }
+      }
+    }).then(() => self.skipWaiting())
   );
 });
 
-// Activate Event - Clean up old caches
+// Activate Event
 self.addEventListener('activate', (event) => {
-  console.log('[Service Worker] Activating...');
-  
+  console.log('[Service Worker] Activating…');
+
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((cacheName) => {
-            return cacheName !== CACHE_NAME && cacheName !== DATA_CACHE_NAME;
+    caches.keys().then((names) =>
+      Promise.all(
+        names
+          .filter((name) => name !== CACHE_NAME && name !== DATA_CACHE_NAME)
+          .map((name) => {
+            console.log('[SW] Deleting old cache:', name);
+            return caches.delete(name);
           })
-          .map((cacheName) => {
-            console.log('[Service Worker] Deleting old cache:', cacheName);
-            return caches.delete(cacheName);
-          })
-      );
-    }).then(() => {
-      console.log('[Service Worker] Claiming clients');
-      return self.clients.claim();
-    })
+      )
+    ).then(() => self.clients.claim())
   );
 });
 
-// Fetch Event - Network First with Cache Fallback for API, Cache First for Assets
+// Fetch Event
 self.addEventListener('fetch', (event) => {
-  const { request } = event;
+  const request = event.request;
   const url = new URL(request.url);
 
-  // Skip chrome extension and other non-http requests
-  if (!request.url.startsWith('http')) {
-    return;
-  }
+  if (!url.protocol.startsWith('http')) return;
 
-  // Handle API requests - Network First with Cache Fallback
+  // API: Network First
   if (url.origin === 'https://story-api.dicoding.dev') {
     event.respondWith(
-      caches.open(DATA_CACHE_NAME).then((cache) => {
-        return fetch(request)
-          .then((networkResponse) => {
-            // Only cache successful GET requests
-            if (request.method === 'GET' && networkResponse.ok) {
-              cache.put(request, networkResponse.clone());
-            }
-            return networkResponse;
-          })
-          .catch(() => {
-            // If network fails, try to get from cache
-            return cache.match(request).then((cachedResponse) => {
-              if (cachedResponse) {
-                console.log('[Service Worker] Serving from cache:', request.url);
-                return cachedResponse;
-              }
-              // If no cache, return offline response
-              return new Response(
-                JSON.stringify({
-                  error: true,
-                  message: 'You are offline. Cached data is not available.',
-                  listStory: []
-                }),
-                {
-                  headers: { 'Content-Type': 'application/json' },
-                  status: 503
-                }
-              );
-            });
-          });
+      caches.open(DATA_CACHE_NAME).then(async (cache) => {
+        try {
+          const netResponse = await fetch(request);
+          if (request.method === 'GET' && netResponse.ok) {
+            cache.put(request, netResponse.clone());
+          }
+          return netResponse;
+        } catch (_) {
+          const cached = await cache.match(request);
+          if (cached) return cached;
+
+          return new Response(
+            JSON.stringify({
+              error: true,
+              message: 'Offline & no cached data',
+              listStory: []
+            }),
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+        }
       })
     );
     return;
   }
 
-  // Handle asset requests - Cache First with Network Fallback
+  // Assets: Cache First
   event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      if (cachedResponse) {
-        console.log('[Service Worker] Serving from cache:', request.url);
-        return cachedResponse;
-      }
+    caches.match(request).then((cached) => {
+      if (cached) return cached;
 
       return fetch(request)
-        .then((networkResponse) => {
-          // Cache successful responses
-          if (request.method === 'GET' && networkResponse.ok) {
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, networkResponse.clone());
-            });
+        .then((response) => {
+          if (request.method === 'GET' && response.ok) {
+            caches.open(CACHE_NAME).then((cache) =>
+              cache.put(request, response.clone())
+            );
           }
-          return networkResponse;
+          return response;
         })
-        .catch((error) => {
-          console.error('[Service Worker] Fetch failed:', error);
-          // Return a fallback response for failed requests
+        .catch(() => {
           if (request.destination === 'image') {
-            return new Response('', { status: 404, statusText: 'Image not found' });
+            return new Response('', { status: 404 });
           }
-          throw error;
         });
     })
   );
@@ -134,125 +107,75 @@ self.addEventListener('fetch', (event) => {
 
 // Push Notification Event
 self.addEventListener('push', (event) => {
-  console.log('[Service Worker] Push Received', event);
+  console.log('[SW] Push received');
 
-  let notificationData = {
+  let payload = {
     title: 'Dicoding Story',
-    options: {
-      body: 'You have a new notification',
-      icon: '/images/icon-192x192.png',
-      badge: '/images/icon-72x72.png',
-      data: {
-        url: '/'
-      }
-    }
+    body: 'New story available!',
+    icon: '/images/icon-512x512.png',
+    data: { url: '/' }
   };
 
-  // Parse notification data from push event
-  if (event.data) {
-    try {
-      const payload = event.data.json();
-      console.log('[Service Worker] Push data:', payload);
-      
-      notificationData = {
-        title: payload.title || 'Dicoding Story',
-        options: {
-          body: payload.options?.body || payload.body || 'New story available!',
-          icon: payload.options?.icon || '/images/icon-192x192.png',
-          badge: '/images/icon-72x72.png',
-          tag: 'dicoding-story-notification',
-          requireInteraction: false,
-          actions: [
-            {
-              action: 'view',
-              title: 'View Story',
-              icon: '/images/icon-96x96.png'
-            },
-            {
-              action: 'close',
-              title: 'Close',
-              icon: '/images/icon-96x96.png'
-            }
-          ],
-          data: {
-            url: payload.data?.url || '/',
-            storyId: payload.data?.storyId || null
-          }
-        }
-      };
-    } catch (error) {
-      console.error('[Service Worker] Error parsing push data:', error);
+  try {
+    if (event.data) {
+      const data = event.data.json();
+      payload.title = data.title || payload.title;
+      payload.body = data.body || payload.body;
+      payload.data = data.data || payload.data;
     }
+  } catch (err) {
+    console.error('[SW] Push parse error:', err);
   }
 
   event.waitUntil(
-    self.registration.showNotification(notificationData.title, notificationData.options)
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      icon: payload.icon,
+      badge: payload.icon,
+      data: payload.data
+    })
   );
 });
 
 // Notification Click Event
 self.addEventListener('notificationclick', (event) => {
-  console.log('[Service Worker] Notification clicked', event);
-  
   event.notification.close();
-
   const urlToOpen = event.notification.data?.url || '/';
-  const action = event.action;
 
-  if (action === 'close') {
-    return;
-  }
-
-  // Open or focus the app
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true })
-      .then((clientList) => {
-        const baseUrl = new URL(urlToOpen, self.location.origin).href;
-        
-        // Check if there's already a window open
-        for (const client of clientList) {
-          const clientUrl = new URL(client.url).href;
-          if (clientUrl === baseUrl && 'focus' in client) {
+      .then((clientsList) => {
+        for (const client of clientsList) {
+          if (client.url === urlToOpen && 'focus' in client) {
             return client.focus();
           }
         }
-        
-        // If not, open a new window
-        if (clients.openWindow) {
-          return clients.openWindow(urlToOpen);
-        }
+        return clients.openWindow(urlToOpen);
       })
   );
 });
 
-// Background Sync Event for offline data
+// Background Sync
 self.addEventListener('sync', (event) => {
-  console.log('[Service Worker] Background sync', event.tag);
-
   if (event.tag === 'sync-stories') {
     event.waitUntil(syncOfflineStories());
   }
 });
 
 async function syncOfflineStories() {
-  console.log('[Service Worker] Syncing offline stories...');
-  
+  console.log('[SW] Syncing offline stories…');
+
   try {
-    // Open IndexedDB
     const db = await openDB();
     const tx = db.transaction('pending-stories', 'readonly');
     const store = tx.objectStore('pending-stories');
-    const allRequests = store.getAll();
-    
-    const pendingStories = await new Promise((resolve, reject) => {
-      allRequests.onsuccess = () => resolve(allRequests.result);
-      allRequests.onerror = () => reject(allRequests.error);
+    const all = store.getAll();
+
+    const pending = await new Promise((resolve) => {
+      all.onsuccess = () => resolve(all.result);
     });
 
-    console.log('[Service Worker] Found pending stories:', pendingStories.length);
-
-    // Sync each pending story
-    for (const story of pendingStories) {
+    for (const story of pending) {
       try {
         const formData = new FormData();
         formData.append('description', story.description);
@@ -260,59 +183,42 @@ async function syncOfflineStories() {
         if (story.lat) formData.append('lat', story.lat);
         if (story.lon) formData.append('lon', story.lon);
 
-        const response = await fetch('https://story-api.dicoding.dev/v1/stories', {
+        const res = await fetch('https://story-api.dicoding.dev/v1/stories', {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${story.token}`
-          },
+          headers: { Authorization: `Bearer ${story.token}` },
           body: formData
         });
 
-        if (response.ok) {
-          // Remove from pending if successful
-          const deleteTx = db.transaction('pending-stories', 'readwrite');
-          const deleteStore = deleteTx.objectStore('pending-stories');
-          const deleteRequest = deleteStore.delete(story.id);
-          
-          await new Promise((resolve, reject) => {
-            deleteRequest.onsuccess = () => resolve();
-            deleteRequest.onerror = () => reject(deleteRequest.error);
-          });
-          
-          console.log('[Service Worker] Story synced successfully:', story.id);
+        if (res.ok) {
+          const dtx = db.transaction('pending-stories', 'readwrite');
+          dtx.objectStore('pending-stories').delete(story.id);
         }
-      } catch (error) {
-        console.error('[Service Worker] Error syncing story:', error);
+      } catch (err) {
+        console.error('[SW] Sync story failed:', err);
       }
     }
 
-    // Notify all clients that sync is complete
-    const allClients = await clients.matchAll();
-    allClients.forEach(client => {
-      client.postMessage({
-        type: 'SYNC_COMPLETE',
-        success: true
-      });
+    const clientsList = await clients.matchAll();
+    clientsList.forEach((client) => {
+      client.postMessage({ type: 'SYNC_COMPLETE', success: true });
     });
-  } catch (error) {
-    console.error('[Service Worker] Error in background sync:', error);
+  } catch (err) {
+    console.error('[SW] Sync failed:', err);
   }
 }
 
 function openDB() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('dicoding-story-db', 1);
-    
+
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
-    
+
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
-      
       if (!db.objectStoreNames.contains('pending-stories')) {
         db.createObjectStore('pending-stories', { keyPath: 'id', autoIncrement: true });
       }
-      
       if (!db.objectStoreNames.contains('favorite-stories')) {
         db.createObjectStore('favorite-stories', { keyPath: 'id' });
       }

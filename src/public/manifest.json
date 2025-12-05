@@ -15,29 +15,7 @@
       "purpose": "any maskable"
     }
   ],
-  "screenshots": [
-    {
-      "src": "/images/screenshot-mobile-1.png",
-      "sizes": "540x720",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Home screen with stories and map"
-    },
-    {
-      "src": "/images/screenshot-mobile-2.png",
-      "sizes": "540x720",
-      "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Add new story with location"
-    },
-    {
-      "src": "/images/screenshot-desktop-1.png",
-      "sizes": "1280x720",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "Desktop view with interactive map"
-    }
-  ],
+  
   "shortcuts": [
     {
       "name": "Add Story",
