@@ -1,1 +1,1 @@
-APP_URL=   "homepage": "https://clinquant-babka-46838c.netlify.app/",
+APP_URL=   "homepage": "hhttps://starter-project-with-webpack.netlify.app/",
